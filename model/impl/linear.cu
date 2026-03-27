@@ -2,64 +2,115 @@
 
 #include <random>
 #include <stdexcept>
+#include <string>
 
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/host_vector.h>
 
+// The kernel is unchanged — it only deals with raw float pointers,
+// so it doesn't know or care about Tensor vs device_vector.
 __global__ void linear_forward_kernel(const float* input,
                                       const float* weights,
                                       const float* biases,
                                       float* output,
-                                      int in_features,
-                                      int out_features) {
-    const int o = blockIdx.x * blockDim.x + threadIdx.x;  // output index
-    if (o >= out_features) return;
+                                      int batch_size,
+                                      int in_feature_size,
+                                      int out_feature_size) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    float acc = biases[o];
-    for (int i = 0; i < in_features; ++i) {
-        acc += input[i] * weights[o * in_features + i];
+    if (idx < batch_size * out_feature_size) {
+        const int batch_idx = idx / out_feature_size;
+        const int column_idx = idx % out_feature_size;
+
+        float acc = biases[column_idx];
+
+        for (int i = 0; i < in_feature_size; ++i) {
+            // weights is laid out as [out_feature_size, in_feature_size] (row-major):
+            // weight[out_j, in_i] -> weights[out_j * in_feature_size + in_i]
+            acc += input[batch_idx * in_feature_size + i] *
+                   weights[column_idx * in_feature_size + i];
+        }
+        output[batch_idx * out_feature_size + column_idx] = acc;
     }
-    output[o] = acc;
 }
 
 LinearLayer::LinearLayer(int in_features, int out_features)
-    : in_features_(in_features), out_features_(out_features) {
-    _weights.resize(static_cast<size_t>(in_features_) * static_cast<size_t>(out_features_));
-    _biases.resize(static_cast<size_t>(out_features_));
+    : _in_features(in_features), _out_features(out_features) {
+    _weights.resize(static_cast<size_t>(_in_features) * static_cast<size_t>(_out_features));
+    _biases.resize(static_cast<size_t>(_out_features));
+
+    init_weights(0.0f, 1.0f);
 }
 
-void LinearLayer::forward(const thrust::device_vector<float>& input,
-                          thrust::device_vector<float>& output) {
-    if (input.size() != static_cast<size_t>(in_features_)) {
-        throw std::runtime_error("LinearLayer::forward: input size mismatch");
+void LinearLayer::forward(const Tensor& input, Tensor& output) {
+    // Before: batch_size was a separate int parameter the caller had to pass.
+    // Now:    we read it straight from the tensor's shape.
+    //         input must be 2D: [batch_size, in_features]
+    if (input.ndim() != 2) {
+        throw std::invalid_argument(
+            "LinearLayer::forward: input must be 2D [batch_size, in_features]");
     }
-    output.resize(static_cast<size_t>(out_features_));
+
+    const int batch_size = input.shape(0);   // was: passed as a parameter
+    const int in_feat    = input.shape(1);   // was: checked via input.size() / batch_size
+
+    if (in_feat != _in_features) {
+        throw std::invalid_argument(
+            "LinearLayer::forward: input.shape(1) must equal in_features");
+    }
+
+    // Resize output to [batch_size, out_features].
+    // Tensor::resize sets both the shape AND allocates the underlying buffer.
+    output.resize({batch_size, _out_features});
 
     const int block = 256;
-    const int grid = (out_features_ + block - 1) / block;
+    const int grid = (_out_features * batch_size + block - 1) / block;
 
+    // Before: thrust::raw_pointer_cast(input.data())  — verbose
+    // Now:    input.data_ptr()                         — same raw float*, cleaner
     linear_forward_kernel<<<grid, block>>>(
-        thrust::raw_pointer_cast(input.data()),
+        input.data_ptr(),
         thrust::raw_pointer_cast(_weights.data()),
         thrust::raw_pointer_cast(_biases.data()),
-        thrust::raw_pointer_cast(output.data()),
-        in_features_,
-        out_features_);
-    cudaDeviceSynchronize();
+        output.data_ptr(),
+        batch_size,
+        _in_features,
+        _out_features);
+
+    cudaError_t launch_err = cudaGetLastError();
+    if (launch_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("LinearLayer::forward kernel launch failed: ") +
+            cudaGetErrorString(launch_err));
+    }
+
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("LinearLayer::forward kernel execution failed: ") +
+            cudaGetErrorString(sync_err));
+    }
 }
 
-void LinearLayer::init_weights() {
+void LinearLayer::init_weights(float mean, float std) {
     thrust::host_vector<float> h_w(_weights.size());
     thrust::host_vector<float> h_b(_biases.size());
 
     std::mt19937 rng(42);
-    std::normal_distribution<float> dist(mean_, std_);
+    std::normal_distribution<float> dist(mean, std);
 
     for (size_t i = 0; i < h_w.size(); ++i) h_w[i] = dist(rng);
     for (size_t i = 0; i < h_b.size(); ++i) h_b[i] = 0.0f;
 
     thrust::copy(h_w.begin(), h_w.end(), _weights.begin());
     thrust::copy(h_b.begin(), h_b.end(), _biases.begin());
+}
+
+void LinearLayer::set_weights(const float* weights, size_t size) {
+    if (size != _weights.size()) {
+        throw std::invalid_argument("LinearLayer::set_weights: size must equal weights.size()");
+    }
+    thrust::copy(weights, weights + size, _weights.begin());
 }

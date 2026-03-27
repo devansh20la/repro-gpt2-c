@@ -1,7 +1,4 @@
 #include <iostream>
-#include <span>
-
-
 
 struct GPT2Config {
     int block_size = 1024;
@@ -9,4 +6,4 @@ struct GPT2Config {
     int n_layer = 12;
     int n_head = 12;
     int n_embd = 768;
-}
+};

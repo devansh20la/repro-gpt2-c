@@ -6,6 +6,11 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <cmath>
+
+#include "tensor.h"
+#include "model/linear.h"
+#include "model/embedding.h"
 
 using namespace std;
 
@@ -94,12 +99,49 @@ class Dataset {
 int main() {
     TrainConfig config;
     config.print_all_configs();
-    cout << "--------------------------------" << endl;
-    cout << "Loading train dataset..." << endl;
+    printf("--------------------------------\n");
+    printf("Loading train dataset...\n");
     const string train_file_path = "data/train.bin";
     Dataset train_dataset(train_file_path, config.block_size, config.batch_size);
 
     auto [x, y] = train_dataset.get_batch(0);
+    (void)x;
+    (void)y;
 
+    // printf("--------------------------------\n");
+    // Embedding embedding(10, 3);
+
+    // thrust::device_vector<float> x_device(10);
+    // for (int i = 0; i < 10; i++) {
+    //     x_device[i] = i;
+    // }
+
+    // thrust::device_vector<float> y_device(10, 3);
+    // embedding.forward(x_device, y_device);
+
+    // for (int i = 0; i < 10; i++) {
+    //     printf("%f ", static_cast<float>(y_device[i]));
+    // }
+    // printf("\n");
+
+    printf("--------------------------------\n");
+    // Before: thrust::device_vector<float> x_device(2 * 768, 1.0f) — flat, no shape
+    // Now:    Tensor with shape [2, 768] — batch_size=2, in_features=768
+    Tensor x_device({2, 768}, 1.0f);
+    Tensor y_device;
+
+    LinearLayer linear_layer(768, 1024);
+    // Before: linear_layer.forward(x_device, 2, y_device) — had to pass batch_size=2
+    // Now:    batch_size is read from x_device.shape(0) automatically
+    linear_layer.forward(x_device, y_device);
+
+    // After forward, y_device.shape() is [2, 1024]
+    for (int i = 0; i < static_cast<int>(y_device.size()); i++) {
+        printf("%f ", static_cast<float>(y_device.storage()[i]));
+    }
+    printf("\n");
+    printf("--------------------------------\n");
+    printf("Forward pass completed\n");
+    
     return 0;
 };
