@@ -45,25 +45,41 @@ LinearLayer::LinearLayer(int in_features, int out_features)
 }
 
 void LinearLayer::forward(const Tensor& input, Tensor& output) {
-    // Before: batch_size was a separate int parameter the caller had to pass.
-    // Now:    we read it straight from the tensor's shape.
-    //         input must be 2D: [batch_size, in_features]
-    if (input.ndim() != 2) {
+    // PyTorch's nn.Linear works on any number of dimensions:
+    //   1D  [C]         → batch_size = 1        → output [out]
+    //   2D  [B, C]      → batch_size = B        → output [B, out]
+    //   3D  [B, T, C]   → batch_size = B*T      → output [B, T, out]
+    //
+    // The rule: the LAST dimension is the feature dimension,
+    // everything before it is collapsed into one "batch" axis for the kernel.
+    if (input.ndim() < 1) {
         throw std::invalid_argument(
-            "LinearLayer::forward: input must be 2D [batch_size, in_features]");
+            "LinearLayer::forward: input must have at least 1 dimension");
     }
 
-    const int batch_size = input.shape(0);   // was: passed as a parameter
-    const int in_feat    = input.shape(1);   // was: checked via input.size() / batch_size
+    const int in_feat = input.shape(-1);
 
     if (in_feat != _in_features) {
         throw std::invalid_argument(
-            "LinearLayer::forward: input.shape(1) must equal in_features");
+            "LinearLayer::forward: input's last dimension (" +
+            std::to_string(in_feat) + ") must equal in_features (" +
+            std::to_string(_in_features) + ")");
     }
 
-    // Resize output to [batch_size, out_features].
-    // Tensor::resize sets both the shape AND allocates the underlying buffer.
-    output.resize({batch_size, _out_features});
+    // batch_size = product of all dims except the last
+    int batch_size = 1;
+    for (int i = 0; i < input.ndim() - 1; i++) {
+        batch_size *= input.shape(i);
+    }
+
+    // Output shape keeps the leading dims, replaces the last with out_features.
+    //   [B, T, C_in] → [B, T, C_out]
+    std::vector<int> out_shape;
+    for (int i = 0; i < input.ndim() - 1; i++) {
+        out_shape.push_back(input.shape(i));
+    }
+    out_shape.push_back(_out_features);
+    output.resize(out_shape);
 
     const int block = 256;
     const int grid = (_out_features * batch_size + block - 1) / block;

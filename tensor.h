@@ -54,6 +54,24 @@ public:
         _shape = new_shape;
     }
 
+    // Change shape metadata WITHOUT reallocating the GPU buffer.
+    // The total number of elements must stay the same.
+    //
+    // PyTorch equivalent:  t.reshape(new_shape)  or  t.view(new_shape)
+    //
+    // This is free — no GPU work at all, just updating the host-side
+    // shape vector.  Use it to reinterpret [B, T, C] as [B*T, C] etc.
+    void reshape(const std::vector<int>& new_shape) {
+        size_t n = 1;
+        for (int d : new_shape) n *= d;
+        if (n != _data.size()) {
+            throw std::invalid_argument(
+                "TensorBase::reshape: new total size (" + std::to_string(n) +
+                ") differs from current (" + std::to_string(_data.size()) + ")");
+        }
+        _shape = new_shape;
+    }
+
     T* data_ptr() { return thrust::raw_pointer_cast(_data.data()); }
     const T* data_ptr() const { return thrust::raw_pointer_cast(_data.data()); }
 

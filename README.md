@@ -12,9 +12,7 @@ pip install numpy, tiktoken
 ```bash
 nvcc -ccbin /usr/bin/g++-10 -std=c++20 -O2 -o train_gpt2 \
   train_gpt2.cu \
-  model/impl/linear.cu \
-  model/impl/act.cu \
-  model/impl/embedding.cu
+  model/*.cu
 ```
 
 # Layers
@@ -27,7 +25,7 @@ nvcc -ccbin /usr/bin/g++-10 -std=c++20 -O2 -o train_gpt2 \
 | [x] | [ ] | `Attention` | `F.scaled_dot_product_attention` |
 | [x] | [ ] | `CausalAttention` | Full attention block |
 | [ ] | [ ] | `LayerNorm` | `nn.LayerNorm` |
-| [ ] | [ ] | `GELU` | `nn.GELU` |
+| [x] | [ ] | `GELU` | `nn.GELU` |
 | [ ] | [ ] | `MLP` | `Linear -> GELU -> Linear` |
 | [ ] | [ ] | `TransformerBlock` | `LN -> Attn -> res -> LN -> MLP -> res` |
 | [ ] | [ ] | `GPT2` | Full model |
