@@ -134,6 +134,7 @@ void Softmax::forward(const Tensor& input, Tensor& output) {
     // n = size of the last dimension (the axis we softmax over)
     // num_rows = everything else collapsed (product of all other dims)
     // e.g. input [B, T, vocab_size] -> n=vocab_size, num_rows=B*T
+    // e.g. input [B, n_heads, seq_len, n_embd] -> n=n_embd, num_rows=B*n_heads*seq_len
     const int n = input.shape(-1);
     const int num_rows = static_cast<int>(input.size()) / n;
 

@@ -17,14 +17,15 @@ __global__ void linear_forward_kernel(const float* input,
                                       float* output,
                                       int batch_size,
                                       int in_feature_size,
-                                      int out_feature_size) {
+                                      int out_feature_size,
+                                      bool bias) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx < batch_size * out_feature_size) {
         const int batch_idx = idx / out_feature_size;
         const int column_idx = idx % out_feature_size;
 
-        float acc = biases[column_idx];
+        float acc = bias ? biases[column_idx] : 0.0f;
 
         for (int i = 0; i < in_feature_size; ++i) {
             // weights is laid out as [out_feature_size, in_feature_size] (row-major):
@@ -36,22 +37,16 @@ __global__ void linear_forward_kernel(const float* input,
     }
 }
 
-LinearLayer::LinearLayer(int in_features, int out_features)
-    : _in_features(in_features), _out_features(out_features) {
+LinearLayer::LinearLayer(int in_features, int out_features, bool bias)
+    : _in_features(in_features), _out_features(out_features), _bias(bias) {
     _weights.resize(static_cast<size_t>(_in_features) * static_cast<size_t>(_out_features));
-    _biases.resize(static_cast<size_t>(_out_features));
-
+    if (bias) {
+        _biases.resize(static_cast<size_t>(_out_features));
+    }
     init_weights(0.0f, 1.0f);
 }
 
 void LinearLayer::forward(const Tensor& input, Tensor& output) {
-    // PyTorch's nn.Linear works on any number of dimensions:
-    //   1D  [C]         → batch_size = 1        → output [out]
-    //   2D  [B, C]      → batch_size = B        → output [B, out]
-    //   3D  [B, T, C]   → batch_size = B*T      → output [B, T, out]
-    //
-    // The rule: the LAST dimension is the feature dimension,
-    // everything before it is collapsed into one "batch" axis for the kernel.
     if (input.ndim() < 1) {
         throw std::invalid_argument(
             "LinearLayer::forward: input must have at least 1 dimension");
@@ -86,14 +81,17 @@ void LinearLayer::forward(const Tensor& input, Tensor& output) {
 
     // Before: thrust::raw_pointer_cast(input.data())  — verbose
     // Now:    input.data_ptr()                         — same raw float*, cleaner
+
     linear_forward_kernel<<<grid, block>>>(
         input.data_ptr(),
         thrust::raw_pointer_cast(_weights.data()),
-        thrust::raw_pointer_cast(_biases.data()),
+        _bias ? thrust::raw_pointer_cast(_biases.data()) : nullptr,
         output.data_ptr(),
         batch_size,
         _in_features,
-        _out_features);
+        _out_features,
+        _bias
+    );
 
     cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess) {
@@ -111,17 +109,17 @@ void LinearLayer::forward(const Tensor& input, Tensor& output) {
 }
 
 void LinearLayer::init_weights(float mean, float std) {
-    thrust::host_vector<float> h_w(_weights.size());
-    thrust::host_vector<float> h_b(_biases.size());
-
     std::mt19937 rng(42);
     std::normal_distribution<float> dist(mean, std);
 
+    thrust::host_vector<float> h_w(_weights.size());
     for (size_t i = 0; i < h_w.size(); ++i) h_w[i] = dist(rng);
-    for (size_t i = 0; i < h_b.size(); ++i) h_b[i] = 0.0f;
-
     thrust::copy(h_w.begin(), h_w.end(), _weights.begin());
-    thrust::copy(h_b.begin(), h_b.end(), _biases.begin());
+    if (_bias) {
+        thrust::host_vector<float> h_b(_biases.size());
+        for (size_t i = 0; i < h_b.size(); ++i) h_b[i] = 0.0f;
+        thrust::copy(h_b.begin(), h_b.end(), _biases.begin());
+    }
 }
 
 void LinearLayer::set_weights(const float* weights, size_t size) {

@@ -8,9 +8,13 @@
 #include <vector>
 #include <cmath>
 
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/host_vector.h>
+
+#include "gpt2_config.h"
 #include "tensor.h"
-#include "model/linear.h"
-#include "model/embedding.h"
+#include "model.h"
 
 using namespace std;
 
@@ -19,7 +23,7 @@ struct TrainConfig {
     int batch_size = 24;
     int block_size = 1024;
     float batch_size_in_token_req = static_cast<float>(1 << 19);  // ~0.5M tokens
-    int train_steps = 1000;
+    int train_steps = 1;
     float lr = 6e-4f;
     tuple<float, float> betas{0.9f, 0.95f};
     float eps = 1e-8f;
@@ -99,14 +103,60 @@ class Dataset {
 int main() {
     TrainConfig config;
     config.print_all_configs();
+
+    GPT2Config gpt2_config;
+    gpt2_config.print_all_configs();
+
     printf("--------------------------------\n");
     printf("Loading train dataset...\n");
     const string train_file_path = "data/train.bin";
     Dataset train_dataset(train_file_path, config.block_size, config.batch_size);
 
     auto [x, y] = train_dataset.get_batch(0);
-    (void)x;
-    (void)y;
+
+    // Token ids on GPU: Embedding expects TensorBase<uint16_t> [B, T]
+    TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
+    {
+        thrust::host_vector<uint16_t> hx(x.size());
+        for (size_t i = 0; i < x.size(); ++i) {
+            hx[i] = x[i];
+        }
+        thrust::copy(
+            hx.begin(),
+            hx.end(),
+            thrust::device_ptr<uint16_t>(input_ids.data_ptr()));
+    }
+
+    GPT2 gpt2(gpt2_config);
+    Tensor output({config.batch_size, config.block_size, gpt2_config.n_embd});
+
+    for (int i = 0; i < config.train_steps; i++) {
+        auto batch_idx = i % 12;
+        auto [x, y] = train_dataset.get_batch(batch_idx);
+        TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
+        {
+            thrust::host_vector<uint16_t> hx(x.size());
+            for (size_t i = 0; i < x.size(); ++i) {
+                hx[i] = x[i];
+            }
+            thrust::copy(
+                hx.begin(),
+                hx.end(),
+                thrust::device_ptr<uint16_t>(input_ids.data_ptr()));
+        }
+        gpt2.forward(input_ids, output);
+        printf("Batch %d / %d | Train Step %d / %d Completed \n", batch_idx + 1, config.batch_size, i + 1, config.train_steps);
+    }
+    printf("Output: ");
+    printf("Shape: ");
+    for (int i = 0; i < static_cast<int>(output.shape().size()); i++) {
+        printf("%d \n", output.shape()[i]);
+    }
+    // printf("\n");
+    // for (int i = 0; i < static_cast<int>(output.size()); i++) {
+    //     printf("%f ", static_cast<float>(output.storage()[i]));
+    // }
+    // printf("\n");
 
     // printf("--------------------------------\n");
     // Embedding embedding(10, 3);
@@ -124,24 +174,24 @@ int main() {
     // }
     // printf("\n");
 
-    printf("--------------------------------\n");
-    // Before: thrust::device_vector<float> x_device(2 * 768, 1.0f) — flat, no shape
-    // Now:    Tensor with shape [2, 768] — batch_size=2, in_features=768
-    Tensor x_device({2, 768}, 1.0f);
-    Tensor y_device;
+    // printf("--------------------------------\n");
+    // // Before: thrust::device_vector<float> x_device(2 * 768, 1.0f) — flat, no shape
+    // // Now:    Tensor with shape [2, 768] — batch_size=2, in_features=768
+    // Tensor x_device({2, 768}, 1.0f);
+    // Tensor y_device;
 
-    LinearLayer linear_layer(768, 1024);
-    // Before: linear_layer.forward(x_device, 2, y_device) — had to pass batch_size=2
-    // Now:    batch_size is read from x_device.shape(0) automatically
-    linear_layer.forward(x_device, y_device);
+    // LinearLayer linear_layer(768, 1024);
+    // // Before: linear_layer.forward(x_device, 2, y_device) — had to pass batch_size=2
+    // // Now:    batch_size is read from x_device.shape(0) automatically
+    // linear_layer.forward(x_device, y_device);
 
-    // After forward, y_device.shape() is [2, 1024]
-    for (int i = 0; i < static_cast<int>(y_device.size()); i++) {
-        printf("%f ", static_cast<float>(y_device.storage()[i]));
-    }
-    printf("\n");
-    printf("--------------------------------\n");
-    printf("Forward pass completed\n");
+    // // After forward, y_device.shape() is [2, 1024]
+    // for (int i = 0; i < static_cast<int>(y_device.size()); i++) {
+    //     printf("%f ", static_cast<float>(y_device.storage()[i]));
+    // }
+    // printf("\n");
+    // printf("--------------------------------\n");
+    // printf("Forward pass completed\n");
     
     return 0;
 };

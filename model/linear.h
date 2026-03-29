@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <thrust/device_vector.h>
 #include "../tensor.h"
 
@@ -7,11 +8,12 @@ class LinearLayer {
 private:
     int _in_features;
     int _out_features;
+    bool _bias;
     thrust::device_vector<float> _weights;  // [out_features, in_features]
     thrust::device_vector<float> _biases;   // [out_features]
 
 public:
-    LinearLayer(int in_features, int out_features);
+    LinearLayer(int in_features, int out_features, bool bias=true);
 
     // input shape:  [batch_size, in_features]
     // output shape: [batch_size, out_features]

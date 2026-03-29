@@ -2,9 +2,9 @@
 //  test_layers.cu — unit tests for every layer in model/
 //
 //  Build:
-//    nvcc -std=c++20 -O2 -o test_layers \
+//    nvcc -O2 -o test_layers \
 //      test_layers.cu model/impl/act.cu model/impl/embedding.cu \
-//      model/impl/linear.cu model/impl/causal_attn.cu
+//      model/impl/linear.cu model/impl/causal_attn.cu model/impl/norm.cu
 //
 //  Run:
 //    ./test_layers
@@ -27,6 +27,7 @@
 #include "model/embedding.h"
 #include "model/linear.h"
 #include "model/causal_attn.h"
+#include "model/norm.h"
 
 #include <thrust/copy.h>
 #include <thrust/host_vector.h>
@@ -694,10 +695,10 @@ static void test_embedding_out_of_range() {
 // ═══════════════════════════════════════════════════════════════════════════
 //  6. Attention (model/causal_attn.h) — scaled dot-product attention
 //
-//  scores  = Q @ K^T / √C       [B, T, T]
+//  scores  = Q @ K^T / √d_head   [B, H, T, T]
 //  scores  = causal_mask(scores)  future positions → -∞
 //  weights = softmax(scores)      each row sums to 1
-//  output  = weights @ V          [B, T, C]
+//  output  = weights @ V          [B, H, T, d_head]
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void test_attention_seq_len_1() {
@@ -705,22 +706,23 @@ static void test_attention_seq_len_1() {
     //  col == row so it's kept).  The softmax of a single value is 1.0,
     //  so output = 1.0 * V = V.
     //
-    //  Q = K = V = [[[1, 2]]]   shape [1, 1, 2]
+    //  Q = K = V with shape [B,H,T,d] = [1,1,1,2]
     //
     //  scores = Q·K^T / √2 = (1*1 + 2*2)/√2 = 5/√2 ≈ 3.535
     //  softmax([3.535]) = [1.0]
     //  output = 1.0 * V = [[1, 2]]
-    Tensor q({1, 1, 2}), k({1, 1, 2}), v({1, 1, 2});
+    Tensor q({1, 1, 1, 2}), k({1, 1, 1, 2}), v({1, 1, 1, 2});
     upload(q, {1, 2});
     upload(k, {1, 2});
     upload(v, {1, 2});
 
-    Attention attn(2);
+    Attention attn(2, 1);  // head_dim=2, n_heads=1
     Tensor output;
     attn.forward(q, k, v, output);
 
     bool ok = check_tensor(output, {1.0f, 2.0f});
-    ok &= (output.shape(0) == 1 && output.shape(1) == 1 && output.shape(2) == 2);
+    ok &= (output.shape(0) == 1 && output.shape(1) == 1 && output.shape(2) == 1
+           && output.shape(3) == 2);
 
     report("Attention seq_len=1 (output == V)", ok);
 }
@@ -748,12 +750,12 @@ static void test_attention_causal_mask() {
     //  Step 3: weights @ V
     //    row 0: [1.0*1+0.0*0, 1.0*0+0.0*1] = [1.0, 0.0]
     //    row 1: [0.33022*1+0.66978*0, 0.33022*0+0.66978*1] = [0.33022, 0.66978]
-    Tensor q({1, 2, 2}), k({1, 2, 2}), v({1, 2, 2});
+    Tensor q({1, 1, 2, 2}), k({1, 1, 2, 2}), v({1, 1, 2, 2});
     upload(q, {1, 0, 0, 1});
     upload(k, {1, 0, 0, 1});
     upload(v, {1, 0, 0, 1});
 
-    Attention attn(2);
+    Attention attn(2, 1);
     Tensor output;
     attn.forward(q, k, v, output);
 
@@ -763,25 +765,27 @@ static void test_attention_causal_mask() {
     float p1 = exp_s / (1.0f + exp_s);
 
     bool ok = check_tensor(output, {1.0f, 0.0f, p0, p1}, 1e-3f);
-    ok &= (output.shape(0) == 1 && output.shape(1) == 2 && output.shape(2) == 2);
+    ok &= (output.shape(0) == 1 && output.shape(1) == 1 && output.shape(2) == 2
+           && output.shape(3) == 2);
 
     report("Attention causal mask (2x2)", ok);
 }
 
 static void test_attention_output_shape() {
-    //  Just verify that [B, T, C] → [B, T, C] shapes are correct.
-    Tensor q({2, 4, 8}, 1.0f);
-    Tensor k({2, 4, 8}, 1.0f);
-    Tensor v({2, 4, 8}, 1.0f);
+    //  [B,H,T,d] → same shape
+    Tensor q({2, 1, 4, 8}, 1.0f);
+    Tensor k({2, 1, 4, 8}, 1.0f);
+    Tensor v({2, 1, 4, 8}, 1.0f);
 
-    Attention attn(8);
+    Attention attn(8, 1);
     Tensor output;
     attn.forward(q, k, v, output);
 
-    bool ok = (output.ndim() == 3)
+    bool ok = (output.ndim() == 4)
            && (output.shape(0) == 2)
-           && (output.shape(1) == 4)
-           && (output.shape(2) == 8);
+           && (output.shape(1) == 1)
+           && (output.shape(2) == 4)
+           && (output.shape(3) == 8);
 
     report("Attention output shape [2,4,8]", ok);
 }
@@ -790,16 +794,16 @@ static void test_attention_first_row_copies_first_value() {
     //  The first position (row 0) can only attend to itself (everything
     //  else is masked).  So output[0] should always equal V[0], regardless
     //  of the query/key values.
-    Tensor q({1, 3, 4}, 0.0f);
-    Tensor k({1, 3, 4}, 0.0f);
-    Tensor v({1, 3, 4});
+    Tensor q({1, 1, 3, 4}, 0.0f);
+    Tensor k({1, 1, 3, 4}, 0.0f);
+    Tensor v({1, 1, 3, 4});
     upload(v, {
         10, 20, 30, 40,    // V[0] — this should appear in output[0]
          1,  2,  3,  4,
          5,  6,  7,  8
     });
 
-    Attention attn(4);
+    Attention attn(4, 1);
     Tensor output;
     attn.forward(q, k, v, output);
 
@@ -814,7 +818,7 @@ static void test_attention_first_row_copies_first_value() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  7. CausalAttention (model/causal_attn.h) — full attention block
+//  7. CausalMultiHeadedAttention (model/causal_attn.h) — full attention block
 //
 //  Linear projection [B, T, C] → [B, T, 3C] then split + Attention.
 //  Hard to test exact values (random projection weights), so we test
@@ -822,9 +826,9 @@ static void test_attention_first_row_copies_first_value() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void test_causal_attention_output_shape() {
-    //  CausalAttention(n_embd=8)
+    //  n_embd=8, n_heads=1 → head_dim=8
     //  input [2, 4, 8] → output [2, 4, 8]
-    CausalAttention cattn(8);
+    CausalMultiHeadedAttention cattn(8, 1);
     Tensor input({2, 4, 8}, 1.0f);
     Tensor output;
     cattn.forward(input, output);
@@ -834,13 +838,13 @@ static void test_causal_attention_output_shape() {
            && (output.shape(1) == 4)
            && (output.shape(2) == 8);
 
-    report("CausalAttention output shape [2,4,8]", ok);
+    report("CausalMultiHeadedAttention output shape [2,4,8]", ok);
 }
 
 static void test_causal_attention_deterministic() {
     //  Running the same input through the same layer twice must produce
     //  identical outputs (no randomness in the forward pass).
-    CausalAttention cattn(4);
+    CausalMultiHeadedAttention cattn(4, 1);
     Tensor input({1, 3, 4}, 1.0f);
 
     Tensor out1, out2;
@@ -854,7 +858,148 @@ static void test_causal_attention_deterministic() {
         ok &= close_enough(v1[i], v2[i]);
     }
 
-    report("CausalAttention deterministic (same input -> same output)", ok);
+    report("CausalMultiHeadedAttention deterministic (same input -> same output)", ok);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  8. LayerNorm (model/norm.h) — layer normalization
+//
+//  For each row (last dimension):
+//    1. Compute mean and variance across n_embd
+//    2. Normalize: x_hat = (x - mean) / sqrt(var + eps)
+//    3. Scale and shift: output = gamma * x_hat + beta
+//
+//  eps = 1e-5 prevents division by zero.
+//  gamma (weights) and beta (biases) are learnable per-feature parameters.
+//
+//  PyTorch equivalent: nn.LayerNorm(n_embd)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_layernorm_output_shape() {
+    //  input [2, 3, 4] → output [2, 3, 4]  (shape preserved)
+    LayerNorm ln({2, 3, 4});
+    Tensor input({2, 3, 4}, 1.0f);
+    Tensor output;
+    ln.forward(input, output);
+
+    bool ok = (output.ndim() == 3)
+           && (output.shape(0) == 2)
+           && (output.shape(1) == 3)
+           && (output.shape(2) == 4);
+
+    report("LayerNorm output shape [2,3,4]", ok);
+}
+
+static void test_layernorm_uniform_input() {
+    //  If all elements in a row are the same, the normalized values are 0
+    //  (because x - mean = 0 for every element).
+    //  Then output = gamma * 0 + beta = beta for each element.
+    //
+    //  With random gamma/beta (seed 42), we just verify all values in a row
+    //  are identical (since every input position gets the same normalization).
+    LayerNorm ln({1, 1, 4});
+    Tensor input({1, 1, 4}, 5.0f);
+    Tensor output;
+    ln.forward(input, output);
+
+    auto vals = to_host(output);
+
+    // Reproduce the expected biases from seed-42 init
+    // (since (x - mean) = 0 for uniform input, output = gamma*0 + beta = beta)
+    std::mt19937 rng(42);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<float> expected_biases(4);
+    for (int i = 0; i < 4; i++) {
+        dist(rng);                     // skip gamma[i]
+        expected_biases[i] = dist(rng); // beta[i]
+    }
+
+    report("LayerNorm uniform input -> output equals beta",
+           check_tensor(output, expected_biases, 1e-3f));
+}
+
+static void test_layernorm_known_values() {
+    //  Test with a hand-computed example.
+    //  input = [[[2, 4, 6]]]  shape [1, 1, 3]
+    //
+    //  mean = (2+4+6)/3 = 4
+    //  var  = ((2-4)^2 + (4-4)^2 + (6-4)^2) / 3 = (4+0+4)/3 = 8/3
+    //  inv_std = 1 / sqrt(8/3 + 1e-5)
+    //
+    //  x_hat[0] = (2-4) * inv_std = -2 * inv_std
+    //  x_hat[1] = (4-4) * inv_std = 0
+    //  x_hat[2] = (6-4) * inv_std = 2 * inv_std
+    //
+    //  output = gamma * x_hat + beta
+    //
+    //  With seed-42 random gamma/beta, we compute expected on the host.
+    LayerNorm ln({1, 1, 3});
+    Tensor input({1, 1, 3});
+    upload(input, {2.0f, 4.0f, 6.0f});
+
+    Tensor output;
+    ln.forward(input, output);
+
+    // Reproduce gamma and beta from seed 42
+    std::mt19937 rng(42);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    float gamma[3], beta[3];
+    for (int i = 0; i < 3; i++) {
+        gamma[i] = dist(rng);
+        beta[i]  = dist(rng);
+    }
+
+    float mean = 4.0f;
+    float var  = 8.0f / 3.0f;
+    float inv_std = 1.0f / sqrtf(var + 1e-5f);
+
+    float in[3] = {2.0f, 4.0f, 6.0f};
+    std::vector<float> expected(3);
+    for (int i = 0; i < 3; i++) {
+        expected[i] = gamma[i] * (in[i] - mean) * inv_std + beta[i];
+    }
+
+    report("LayerNorm known values [2,4,6]",
+           check_tensor(output, expected, 1e-3f));
+}
+
+static void test_layernorm_rows_independent() {
+    //  Each (batch, time) position is normalized independently.
+    //  Two rows with different distributions should produce different outputs.
+    LayerNorm ln({1, 2, 3});
+    Tensor input({1, 2, 3});
+    upload(input, {1, 2, 3, 10, 20, 30});
+
+    Tensor output;
+    ln.forward(input, output);
+
+    auto vals = to_host(output);
+
+    // The two rows have the same relative distribution (1:2:3 vs 10:20:30)
+    // so after normalization x_hat values should be identical.
+    // But since gamma/beta are the same for both rows, outputs should match.
+    bool ok = true;
+    for (int i = 0; i < 3; i++) {
+        ok &= close_enough(vals[i], vals[3 + i], 1e-3f);
+    }
+
+    report("LayerNorm proportional rows -> same output", ok);
+}
+
+static void test_layernorm_rejects_non_3d() {
+    //  Current implementation requires exactly 3D input [B, T, C].
+    LayerNorm ln({4});
+    Tensor input({4}, 1.0f);
+    Tensor output;
+
+    bool threw = false;
+    try {
+        ln.forward(input, output);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+
+    report("LayerNorm rejects non-3D input", threw);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -913,9 +1058,16 @@ int main() {
     test_attention_output_shape();
     test_attention_first_row_copies_first_value();
 
-    printf("\n--- CausalAttention ---\n");
+    printf("\n--- CausalMultiHeadedAttention ---\n");
     test_causal_attention_output_shape();
     test_causal_attention_deterministic();
+
+    printf("\n--- LayerNorm ---\n");
+    test_layernorm_output_shape();
+    test_layernorm_uniform_input();
+    test_layernorm_known_values();
+    test_layernorm_rows_independent();
+    test_layernorm_rejects_non_3d();
 
     printf("\n========================================\n");
     printf("  Results: %d passed, %d failed\n", g_passed, g_failed);
