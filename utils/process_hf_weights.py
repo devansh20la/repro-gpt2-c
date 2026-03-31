@@ -1,5 +1,6 @@
 from transformers import GPT2LMHeadModel
 import numpy as np
+import struct
 
 
 mapping = {
@@ -154,23 +155,51 @@ mapping = {
     "lm_head.weight": "linear_out.weights"
 }
 
-weights_dict = {}
 if __name__ == "__main__":
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
-
     weights = model_hf.state_dict()
 
-    for key, value in weights.items():
-        if key in mapping:
-            weights_dict[mapping[key]] = {
-                "shape": np.array(value.detach().numpy().shape, dtype=np.int32).tobytes(), 
-                "data": value.detach().numpy().flatten().tobytes()
-            }
-        else:
-            print(f"Key {key} not in mapping")
+    records = {}
+    for hf_key, t in weights.items():
+        if hf_key not in mapping:
+            raise ValueError(f"Key {hf_key} not in mapping")
 
+        out_key = mapping[hf_key]
+
+        a = t.detach().cpu().numpy()
+
+        # Match CUDA LinearLayer weight layout: [out_features, in_features].
+        # HF GPT-2 projection weights are typically [in_features, out_features].
+        if hf_key.endswith(".weight") and a.ndim == 2 and hf_key not in (
+            "transformer.wte.weight",
+            "transformer.wpe.weight",
+        ) and (".ln_" not in hf_key) and (not hf_key.startswith("transformer.ln_f.")):
+            a = a.T
+
+        a = np.asarray(a, dtype=np.float32, order="C")
+        records[out_key] = (tuple(int(x) for x in a.shape), a.tobytes(order="C"))
+
+    # Binary file layout (little-endian):
+    #   count    = uint32 (#tensors)
+    # Then repeated 'count' times:
+    #   key_len     uint32
+    #   key_bytes   key_len bytes (utf-8, no terminator)
+    #   dtype       uint32 (1 = float32)
+    #   ndim        uint32
+    #   shape       int32[ndim]
+    #   data_nbytes uint64
+    #   data        data_nbytes bytes (raw float32, row-major)
+    dtype_code = 1  # float32
+    keys = sorted(records.keys())
     with open("weights.bin", "wb") as f:
-        for key, value in weights_dict.items():
-            f.write(key.encode("utf-8"))
-            f.write(value["shape"])
-            f.write(value["data"])
+        f.write(struct.pack("<I", len(keys)))
+        for k in keys:
+            shape, data = records[k]
+            kb = k.encode("utf-8")
+            f.write(struct.pack("<I", len(kb)))
+            f.write(kb)
+            f.write(struct.pack("<I", dtype_code))
+            f.write(struct.pack("<I", len(shape)))
+            f.write(struct.pack("<" + "i" * len(shape), *shape))
+            f.write(struct.pack("<Q", len(data)))
+            f.write(data)

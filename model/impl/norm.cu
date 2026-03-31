@@ -117,3 +117,15 @@ void LayerNorm::forward(const Tensor& input, Tensor& output) {
             cudaGetErrorString(sync_err));
     }
 }
+
+void LayerNorm::set_params(
+    const float* gamma,
+    size_t gamma_size,
+    const float* beta,
+    size_t beta_size) {
+    if (gamma_size != _weights.size() || beta_size != _biases.size()) {
+        throw std::invalid_argument("LayerNorm::set_params: gamma/beta size mismatch");
+    }
+    thrust::copy(gamma, gamma + gamma_size, _weights.storage().begin());
+    thrust::copy(beta, beta + beta_size, _biases.storage().begin());
+}

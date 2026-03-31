@@ -22,3 +22,22 @@ void MLP::init_weights(float mean, float std) {
     _fc1.init_weights(mean, std);
     _fc2.init_weights(mean, std);
 }
+
+void MLP::load_weights(
+    const std::unordered_map<std::string, std::vector<float>>& tensors,
+    const std::string& prefix) {
+    // Expected keys (prefix already includes trailing dot):
+    //   {prefix}mlp.c_fc.weight
+    //   {prefix}mlp.c_fc.bias
+    //   {prefix}mlp.c_proj.weight
+    //   {prefix}mlp.c_proj.bias
+    const auto& w_fc = tensors.at(prefix + "mlp.c_fc.weight");
+    const auto& b_fc = tensors.at(prefix + "mlp.c_fc.bias");
+    const auto& w_pr = tensors.at(prefix + "mlp.c_proj.weight");
+    const auto& b_pr = tensors.at(prefix + "mlp.c_proj.bias");
+
+    _fc1.set_weights(w_fc.data(), w_fc.size());
+    _fc1.set_biases(b_fc.data(), b_fc.size());
+    _fc2.set_weights(w_pr.data(), w_pr.size());
+    _fc2.set_biases(b_pr.data(), b_pr.size());
+}

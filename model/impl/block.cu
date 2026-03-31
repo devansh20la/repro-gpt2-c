@@ -95,3 +95,21 @@ void Block::init_weights(float mean, float std) {
     _ln2.init_weights({_in_features}, mean, std);
     _mlp.init_weights(mean, std);
 }
+
+void Block::load_weights(
+    const std::unordered_map<std::string, std::vector<float>>& tensors,
+    const std::string& prefix) {
+    // Expected keys (prefix already includes trailing dot):
+    //   {prefix}ln1.weight / {prefix}ln1.bias
+    //   {prefix}ln2.weight / {prefix}ln2.bias
+    // plus attention and mlp keys loaded by submodules.
+    const auto& ln1_w = tensors.at(prefix + "ln1.weight");
+    const auto& ln1_b = tensors.at(prefix + "ln1.bias");
+    const auto& ln2_w = tensors.at(prefix + "ln2.weight");
+    const auto& ln2_b = tensors.at(prefix + "ln2.bias");
+
+    _ln1.set_params(ln1_w.data(), ln1_w.size(), ln1_b.data(), ln1_b.size());
+    _ln2.set_params(ln2_w.data(), ln2_w.size(), ln2_b.data(), ln2_b.size());
+    _attn.load_weights(tensors, prefix);
+    _mlp.load_weights(tensors, prefix);
+}

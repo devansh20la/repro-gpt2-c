@@ -128,3 +128,13 @@ void LinearLayer::set_weights(const float* weights, size_t size) {
     }
     thrust::copy(weights, weights + size, _weights.begin());
 }
+
+void LinearLayer::set_biases(const float* biases, size_t size) {
+    if (!_bias) {
+        throw std::invalid_argument("LinearLayer::set_biases: layer was constructed with bias=false");
+    }
+    if (size != _biases.size()) {
+        throw std::invalid_argument("LinearLayer::set_biases: size must equal biases.size()");
+    }
+    thrust::copy(biases, biases + size, _biases.begin());
+}

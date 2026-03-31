@@ -27,6 +27,4 @@ class GPT2 {
         void init_weights(float mean, float std);
 
         void load_weights(const std::string& path);
-
-
     };

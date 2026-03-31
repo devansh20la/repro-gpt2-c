@@ -128,30 +128,33 @@ int main() {
     }
 
     GPT2 gpt2(gpt2_config);
-    Tensor output({config.batch_size, config.block_size, gpt2_config.n_embd});
+    gpt2.load_weights("checkpoints/weights.bin");
 
-    for (int i = 0; i < config.train_steps; i++) {
-        auto batch_idx = i % 12;
-        auto [x, y] = train_dataset.get_batch(batch_idx);
-        TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
-        {
-            thrust::host_vector<uint16_t> hx(x.size());
-            for (size_t i = 0; i < x.size(); ++i) {
-                hx[i] = x[i];
-            }
-            thrust::copy(
-                hx.begin(),
-                hx.end(),
-                thrust::device_ptr<uint16_t>(input_ids.data_ptr()));
-        }
-        gpt2.forward(input_ids, output);
-        printf("Batch %d / %d | Train Step %d / %d Completed \n", batch_idx + 1, config.batch_size, i + 1, config.train_steps);
-    }
-    printf("Output: ");
-    printf("Shape: ");
-    for (int i = 0; i < static_cast<int>(output.shape().size()); i++) {
-        printf("%d \n", output.shape()[i]);
-    }
+    // GPT2 gpt2(gpt2_config);
+    // Tensor output({config.batch_size, config.block_size, gpt2_config.n_embd});
+
+    // for (int i = 0; i < config.train_steps; i++) {
+    //     auto batch_idx = i % 12;
+    //     auto [x, y] = train_dataset.get_batch(batch_idx);
+    //     TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
+    //     {
+    //         thrust::host_vector<uint16_t> hx(x.size());
+    //         for (size_t i = 0; i < x.size(); ++i) {
+    //             hx[i] = x[i];
+    //         }
+    //         thrust::copy(
+    //             hx.begin(),
+    //             hx.end(),
+    //             thrust::device_ptr<uint16_t>(input_ids.data_ptr()));
+    //     }
+    //     gpt2.forward(input_ids, output);
+    //     printf("Batch %d / %d | Train Step %d / %d Completed \n", batch_idx + 1, config.batch_size, i + 1, config.train_steps);
+    // }
+    // printf("Output: ");
+    // printf("Shape: ");
+    // for (int i = 0; i < static_cast<int>(output.shape().size()); i++) {
+    //     printf("%d \n", output.shape()[i]);
+    // }
     // printf("\n");
     // for (int i = 0; i < static_cast<int>(output.size()); i++) {
     //     printf("%f ", static_cast<float>(output.storage()[i]));

@@ -31,4 +31,6 @@ public:
     }
 
     size_t weights_size() const { return _embeddings.size(); }
+
+    void set_weights(const float* weights, size_t size);
 };

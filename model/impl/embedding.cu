@@ -91,3 +91,10 @@ void Embedding::init_embeddings(
 
     thrust::copy(h_embeddings.begin(), h_embeddings.end(), _embeddings.begin());
 }
+
+void Embedding::set_weights(const float* weights, size_t size) {
+    if (size != _embeddings.size()) {
+        throw std::invalid_argument("Embedding::set_weights: size must equal embeddings.size()");
+    }
+    thrust::copy(weights, weights + size, _embeddings.begin());
+}

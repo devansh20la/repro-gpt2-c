@@ -4,6 +4,9 @@
 #include "norm.h"
 #include "causal_attn.h"
 #include "mlp.h"
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 class Block {
     private:
@@ -17,4 +20,7 @@ class Block {
         Block(int in_features, int scaling_factor, int n_heads);
         void forward(const Tensor& input, Tensor& output);
         void init_weights(float mean, float std);
+        void load_weights(
+            const std::unordered_map<std::string, std::vector<float>>& tensors,
+            const std::string& prefix);
 };

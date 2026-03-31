@@ -10,6 +10,12 @@
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/host_vector.h>
+#include <cstdint>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 GPT2::GPT2(const GPT2Config& config)
     : _config(config),
@@ -113,4 +119,98 @@ void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
     // need to perform weight tying for this linear layer
     output.resize({input.shape(0), input.shape(1), _config.vocab_size});
     _linear_out.forward(ln_out_output, output);
+}
+
+
+void GPT2::load_weights(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            std::string("Failed to open weights file: ") + path);
+    }
+
+    auto read_exact = [&](void* dst, size_t n) {
+        // read n bytes from the file into dst
+        file.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n));
+        if (file.gcount() != static_cast<std::streamsize>(n)) {
+            throw std::runtime_error("Unexpected EOF while reading weights");
+        }
+    };
+
+    // get total number of tensor weights, this should same as
+    // the number of parameters in the model
+    uint32_t count = 0;
+    read_exact(&count, sizeof(count));
+
+    // Store all tensors as host float vectors keyed by name.
+    std::unordered_map<std::string, std::vector<float>> tensors;
+    tensors.reserve(static_cast<size_t>(count));
+
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t key_len = 0;
+        read_exact(&key_len, sizeof(key_len));
+        std::string key;
+        key.resize(key_len);
+        if (key_len) {
+            read_exact(key.data(), key_len);
+        }
+
+        uint32_t dtype = 0;
+        read_exact(&dtype, sizeof(dtype));
+        if (dtype != 1) {
+            throw std::runtime_error("Unsupported dtype code in weights (expected 1=float32)");
+        }
+
+        uint32_t ndim = 0;
+        read_exact(&ndim, sizeof(ndim));
+        std::vector<int32_t> shape;
+        shape.resize(ndim);
+        if (ndim) {
+            read_exact(shape.data(), ndim * sizeof(int32_t));
+        }
+
+        // #########################################################
+        // std::string shape_str = "[ ";
+        // for (size_t i = 0; i < shape.size(); i++) {
+        //     shape_str += std::to_string(shape[i]) + " ";
+        //     if (i + 1 < shape.size()) {
+        //         shape_str += ", ";
+        //     }
+        // }
+        // shape_str += "]";
+        // printf("Key: %s, Shape: %s\n", key.c_str(), shape_str.c_str());
+
+        uint64_t data_nbytes = 0;
+        read_exact(&data_nbytes, sizeof(data_nbytes));
+
+        const size_t n_floats = static_cast<size_t>(data_nbytes / sizeof(float));
+        std::vector<float> data;
+        data.resize(n_floats);
+        if (n_floats) {
+            read_exact(data.data(), static_cast<size_t>(data_nbytes));
+        }
+
+        tensors.emplace(std::move(key), std::move(data));
+    }
+
+    // Top-level tensors
+    {
+        const auto& wte = tensors.at("embedding1.weights");
+        const auto& wpe = tensors.at("embedding2.weights");
+        _embedding1.set_weights(wte.data(), wte.size());
+        _embedding2.set_weights(wpe.data(), wpe.size());
+    }
+
+    for (int bi = 0; bi < _config.n_layers; bi++) {
+        _blocks[bi].load_weights(tensors, "blocks." + std::to_string(bi) + ".");
+    }
+
+    {
+        const auto& lnw = tensors.at("ln_out.weight");
+        const auto& lnb = tensors.at("ln_out.bias");
+        _ln_out.set_params(lnw.data(), lnw.size(), lnb.data(), lnb.size());
+    }
+
+    // linear_out.weights is tied to embedding1 in init_weights().
+    // If you want to verify, you can compare tensors["linear_out.weights"] vs embedding1.weights.
 }

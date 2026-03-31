@@ -12,4 +12,6 @@ public:
     LayerNorm(const std::vector<int>& shape);
     void init_weights(const std::vector<int>& shape, float mean, float stddev);
     void forward(const Tensor& input, Tensor& output);
+
+    void set_params(const float* gamma, size_t gamma_size, const float* beta, size_t beta_size);
 };

@@ -4,7 +4,7 @@
 ```
 sudo apt update && sudo apt -y upgrade && \
 sudo apt-get install -y python3 pip && \
-pip install requests numpy tiktoken && \
+uv pip install requests numpy tiktoken && \
 sudo apt-get install -y g++-10
 ```
 
@@ -41,3 +41,21 @@ nvcc -ccbin /usr/bin/g++-10 -std=c++20 -O2 -o train_gpt2 train_gpt2.cu model.cu
 | [x] | [ ] | `TransformerBlock` | `LN -> Attn -> res -> LN -> MLP -> res` |
 | [ ] | [ ] | `GPT2` | Full model |
 | [ ] | [ ] | `CrossEntropyLoss` | `nn.CrossEntropyLoss` |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# UV
+curl -LsSf https://astral.sh/uv/install.sh | sh

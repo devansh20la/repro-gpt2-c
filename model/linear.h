@@ -22,4 +22,5 @@ public:
 
     void init_weights(float mean, float std);
     void set_weights(const float* weights, size_t size);
+    void set_biases(const float* biases, size_t size);
 };

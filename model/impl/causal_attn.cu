@@ -326,3 +326,22 @@ void CausalMultiHeadedAttention::init_weights(float mean, float std) {
     _proj.init_weights(mean, std);
     _out_proj.init_weights(mean, std);
 }
+
+void CausalMultiHeadedAttention::load_weights(
+    const std::unordered_map<std::string, std::vector<float>>& tensors,
+    const std::string& prefix) {
+    // Expected keys (prefix already includes trailing dot):
+    //   {prefix}attn.c_attn.weight
+    //   {prefix}attn.c_attn.bias
+    //   {prefix}attn.c_proj.weight
+    //   {prefix}attn.c_proj.bias
+    const auto& w_qkv = tensors.at(prefix + "attn.c_attn.weight");
+    const auto& b_qkv = tensors.at(prefix + "attn.c_attn.bias");
+    const auto& w_out = tensors.at(prefix + "attn.c_proj.weight");
+    const auto& b_out = tensors.at(prefix + "attn.c_proj.bias");
+
+    _proj.set_weights(w_qkv.data(), w_qkv.size());
+    _proj.set_biases(b_qkv.data(), b_qkv.size());
+    _out_proj.set_weights(w_out.data(), w_out.size());
+    _out_proj.set_biases(b_out.data(), b_out.size());
+}
