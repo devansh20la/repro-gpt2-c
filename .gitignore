@@ -1,0 +1,3 @@
+checkpoints/weights.bin
+data/train.bin
+data/val.bin

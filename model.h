@@ -25,4 +25,8 @@ class GPT2 {
         GPT2(const GPT2Config& config);
         void forward(const TensorBase<uint16_t>& input, Tensor& output);
         void init_weights(float mean, float std);
-};
+
+        void load_weights(const std::string& path);
+
+
+    };
