@@ -1,3 +1,6 @@
 checkpoints/weights.bin
 data/train.bin
 data/val.bin
+.cursor/
+.venv/
+train_gpt2

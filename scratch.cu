@@ -107,20 +107,13 @@ int main() {
     GPT2Config gpt2_config;
     gpt2_config.print_all_configs();
 
-    printf("--------------------------------\n");
-    printf("Loading train dataset...\n");
-    const string train_file_path = "data/train.bin";
-    Dataset train_dataset(train_file_path, config.block_size, config.batch_size);
-
-    auto [x, y] = train_dataset.get_batch(0);
-
     // Token ids on GPU: Embedding expects TensorBase<uint16_t> [B, T]
     // sample input examples
-    std::vector<uint16_t> input_ids(8*12);
-    for (int i = 0; i < 8*12; i++) {
+    std::vector<uint16_t> input_ids(1*12);
+    for (int i = 0; i < 1*12; i++) {
         input_ids[i] = static_cast<uint16_t>(i);
     }
-    TensorBase<uint16_t> input_ids_device({8, 12});
+    TensorBase<uint16_t> input_ids_device({1, 12});
     thrust::copy(
         input_ids.begin(),
         input_ids.end(),
@@ -130,7 +123,7 @@ int main() {
     gpt2.load_weights("checkpoints/weights.bin");
 
     Tensor output;
-    output.resize({config.batch_size, config.block_size, gpt2_config.vocab_size});
+    output.resize({1, 12, gpt2_config.vocab_size});
     gpt2.forward(input_ids_device, output);
 
     printf("Output: ");
