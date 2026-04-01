@@ -1,100 +1,55 @@
 #include "../embedding.h"
 
-// Implementation notes:
-// - token ids are uint16_t (matches data/preprocess.py dtype)
-// - embedding table is float[vocab_size, out_feature_size]
-
 #include <cmath>
 #include <cstdint>
 #include <random>
 #include <stdexcept>
+#include <string>
 
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/host_vector.h>
 
-__global__ void embedding_forward_kernel(
-    const uint16_t* input,
-    const float* embeddings,
-    float* output,
-    int total_tokens,
-    int num_embeddings,
-    int out_feature_size) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < total_tokens) {
-        const uint16_t input_idx = input[idx];
+// token ids: uint16_t; table: float[num_embeddings, out_feature_size].
+__global__ void embedding_forward_kernel() {
+    // 1. idx = blockIdx.x * blockDim.x + threadIdx.x; guard idx < total_tokens.
+    // 2. Read token id t = input[idx].
+    // 3. If t >= num_embeddings, optionally zero-fill or assert (your choice).
+    // 4. Copy embeddings[t * out_feature_size + k] -> output[idx * out_feature_size + k] for all k.
+}
 
-        if (input_idx >= num_embeddings) {
-            for (int i = 0; i < out_feature_size; i++) {
-                output[idx * out_feature_size + i] = 0.0f;
-            }
-            return;
-        }
-
-        for (int i = 0; i < out_feature_size; i++) {
-            output[idx * out_feature_size + i] = embeddings[input_idx * out_feature_size + i];
-        }
+static void check_cuda(const char* what, cudaError_t err) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(what) + ": " + cudaGetErrorString(err));
     }
 }
 
-Embedding::Embedding(
-    int num_embeddings,
-    int out_feature_size)
+Embedding::Embedding(int num_embeddings, int out_feature_size)
     : _num_embeddings(num_embeddings),
       _out_feature_size(out_feature_size) {
-
     _embeddings.resize(static_cast<size_t>(num_embeddings) * static_cast<size_t>(out_feature_size));
-    
     init_embeddings(0.0f, 1.0f);
 }
 
-void Embedding::forward(
-    const TensorBase<uint16_t>& input,
-    Tensor& output) const {
-
-    // input is [B, N] — read both dims from the tensor's shape
+void Embedding::forward(const TensorBase<uint16_t>& input, Tensor& output) const {
     const int B = input.shape(0);
     const int N = input.shape(1);
     const int total_tokens = B * N;
 
-    // output is [B, N, out_feature_size]
-    output.resize({B, N, _out_feature_size});
-
-    const int num_threads = 256;
-    const int num_blocks = (total_tokens + num_threads - 1) / num_threads;
-
-    // The kernel treats the data as flat (total_tokens elements).
-    // The [B, N] and [B, N, C] shapes are just metadata on the host side —
-    // the GPU buffer is contiguous either way.
-    embedding_forward_kernel<<<num_blocks, num_threads>>>(
-        input.data_ptr(),
-        thrust::raw_pointer_cast(_embeddings.data()),
-        output.data_ptr(),
-        total_tokens,
-        _num_embeddings,
-        _out_feature_size);
-
-    cudaDeviceSynchronize();
+    // 1. Perform checks on the input and output shapes
+    // 2. Resize output tensor
+    // 3. Launch the embedding forward kernel
+    // 4. Perform checks for errors in the kernel launch and execution
+    // 5. Synchronize the device to ensure the kernel has completed
 }
 
-void Embedding::init_embeddings(
-    const float mean, 
-    const float std) {
-    thrust::host_vector<float> h_embeddings(_embeddings.size());
-
-    std::mt19937 rng(42);
-    std::normal_distribution<float> dist(mean, std);
-
-    for (size_t i = 0; i < h_embeddings.size(); ++i) h_embeddings[i] = dist(rng);
-
-    thrust::copy(h_embeddings.begin(), h_embeddings.end(), _embeddings.begin());
+void Embedding::init_embeddings(const float mean, const float std) {
+    // 1. Initialize the embeddings of the embedding layer
+    // If you write once initializer for any layer, this should be easy to write for other layers as well.
 }
 
 void Embedding::set_weights(const float* weights, size_t size) {
-    if (size != _embeddings.size()) {
-        throw std::invalid_argument("Embedding::set_weights: size must equal embeddings.size()");
-    }
-    thrust::copy(weights, weights + size, _embeddings.begin());
+    // 1. Set the weights of the embedding layer
+    // 
 }

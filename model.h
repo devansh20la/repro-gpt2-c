@@ -14,6 +14,7 @@
 
 class GPT2 {
     private:
+        // Intialize all the layers of the GPT2 model.
         GPT2Config _config;
         Embedding _embedding1;
         Embedding _embedding2;
@@ -22,9 +23,15 @@ class GPT2 {
         LayerNorm _ln_out;
     
     public:
+        // Constructor to initialize the GPT2 model
         GPT2(const GPT2Config& config);
+
+        // Forward pass the data through the model
         void forward(const TensorBase<uint16_t>& input, Tensor& output);
+        
+        // Initialize the weights of the model
         void init_weights(float mean, float std);
 
+        // Load the weights of the model from a file
         void load_weights(const std::string& path);
     };

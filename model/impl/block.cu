@@ -1,13 +1,17 @@
 #include "../block.h"
 
+#include <stdexcept>
+#include <string>
+
 #include <cuda_runtime.h>
 
+// Elementwise add for residual: c = a + b, all [B, T, C] contiguous.
 __global__ void add_kernel(const float* a, const float* b, float* c, int B, int T, int C) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < B * T * C) {
-        c[idx] = a[idx] + b[idx];
-    }
+    // 1. idx = blockIdx.x * blockDim.x + threadIdx.x over B*T*C elements.
+    // 2. Guard idx < B*T*C.
+    // 3. c[idx] = a[idx] + b[idx].
 }
+
 
 Block::Block(int in_features, int scaling_factor, int n_heads)
     : _in_features(in_features),
@@ -18,75 +22,22 @@ Block::Block(int in_features, int scaling_factor, int n_heads)
       _mlp(in_features, scaling_factor) {}
 
 void Block::forward(const Tensor& input, Tensor& output) {
-    // Forward preserves shape: [B,T,C] -> [B,T,C]
-    output.resize(input.shape());
+    // The forward pass of block layer is very interesting, as you need to 
+    // deal with the residual connections. 
 
-    Tensor _ln1_output({input.shape(0), input.shape(1), _in_features});
-    _ln1.forward(input, _ln1_output);
+    // 1. Perform checks on the input and output shapes
+    // 2. Resize output tensor
 
-    Tensor _attn_output({input.shape(0), input.shape(1), _in_features});
-    _attn.forward(_ln1_output, _attn_output);
+    // 3. Pass the input through the layer norm layer
+    // 4. Pass the output through the causal multi-head attention layer
 
-    // residual connection
-    int block = 256;
-    int grid = (input.shape(0) * input.shape(1) * input.shape(2) + block - 1) / block;
-    add_kernel<<<grid, block>>>(
-        _attn_output.data_ptr(),
-        input.data_ptr(),
-        _attn_output.data_ptr(),
-        input.shape(0),
-        input.shape(1),
-        input.shape(2)
-    );
+    // 5. Add residual connection between the input and the output of the causal multi-head attention layer
 
-    cudaError_t launch_err = cudaGetLastError();
-    if (launch_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_kernel launch failed: ") +
-            cudaGetErrorString(launch_err));
-    }
 
-    cudaError_t sync_err = cudaDeviceSynchronize();
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_kernel execution failed: ") +
-            cudaGetErrorString(sync_err));
-    }
-
-    // Save the post-attention residual stream (x + attn(ln1(x))).
-    // We need this for the second residual add after the MLP.
-    Tensor attn_resid = _attn_output;
-
-    // layer norm2 & mlp
-    Tensor _ln2_output({input.shape(0), input.shape(1), _in_features});
-    _ln2.forward(_attn_output, _ln2_output);
-    Tensor mlp_out;
-    _mlp.forward(_ln2_output, mlp_out);
-
-    // residual connection
-    grid = (input.shape(0) * input.shape(1) * input.shape(2) + block - 1) / block;
-    add_kernel<<<grid, block>>>(
-        mlp_out.data_ptr(),
-        attn_resid.data_ptr(),
-        output.data_ptr(),
-        input.shape(0),
-        input.shape(1),
-        input.shape(2)
-    );
-
-    launch_err = cudaGetLastError();
-    if (launch_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_kernel launch failed: ") +
-            cudaGetErrorString(launch_err));
-    }
-
-    sync_err = cudaDeviceSynchronize();
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_kernel execution failed: ") +
-            cudaGetErrorString(sync_err));
-    }
+    // 5. Pass the output through the layer norm layer
+    // 6. Pass the output through the MLP layer
+    
+    // 7. Add the residual connection between the input and the output of the MLP layer.
 }
 
 void Block::init_weights(float mean, float std) {
@@ -99,10 +50,6 @@ void Block::init_weights(float mean, float std) {
 void Block::load_weights(
     const std::unordered_map<std::string, std::vector<float>>& tensors,
     const std::string& prefix) {
-    // Expected keys (prefix already includes trailing dot):
-    //   {prefix}ln1.weight / {prefix}ln1.bias
-    //   {prefix}ln2.weight / {prefix}ln2.bias
-    // plus attention and mlp keys loaded by submodules.
     const auto& ln1_w = tensors.at(prefix + "ln1.weight");
     const auto& ln1_b = tensors.at(prefix + "ln1.bias");
     const auto& ln2_w = tensors.at(prefix + "ln2.weight");
