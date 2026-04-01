@@ -1,3 +1,16 @@
 checkpoints/weights.bin
 data/train.bin
 data/val.bin
+.cursor/
+.venv/
+things-i-learnt.md
+scratch.cu
+scratch.ipynb
+.pytest_cache/
+.python-version
+train_gpt2
+pyproject.toml
+__pycache__/
+scratch
+test_layers
+test_layers.cu

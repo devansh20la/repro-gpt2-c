@@ -56,13 +56,14 @@ __global__ void add_broadcast_pos_kernel(
 
 void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
     // input shape is [batch_size, sequence_length] / [B, T] (token ids on GPU)
+    const int B = input.shape(0);
+    const int T = input.shape(1);
 
     // Get token embedding
-    Tensor tok_embed({input.shape(0), input.shape(1), _config.n_embd});
+    Tensor tok_embed({B, T, _config.n_embd});
     _embedding1.forward(input, tok_embed);
 
     // Position ids [1, T] — one sequence 0..T-1; same for every batch row
-    const int T = input.shape(1);
     TensorBase<uint16_t> pos_ids({1, T});
     {
         thrust::host_vector<uint16_t> h(static_cast<size_t>(T));
@@ -79,9 +80,7 @@ void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
     _embedding2.forward(pos_ids, pos_embed_out);
 
     // Add token embedding and position embedding (broadcast pos across batch)
-    Tensor embed_out({input.shape(0), T, _config.n_embd});
-    const int B = input.shape(0);
-    const int C = _config.n_embd;
+    Tensor embed_out({B, T, _config.n_embd});
     int block = 256;
     int grid = (static_cast<int>(embed_out.size()) + block - 1) / block;
     add_broadcast_pos_kernel<<<grid, block>>>(
@@ -90,7 +89,7 @@ void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
         embed_out.data_ptr(),
         B,
         T,
-        C);
+        _config.n_embd);
 
     cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess) {
@@ -110,8 +109,10 @@ void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
     for (int i = 0; i < _config.n_layers; i++) {
         _blocks[i].forward(embed_out, embed_out);
     }
-
-    // layer norm & linear
+    printf("--------------------------------\n");
+    
+   
+    // // layer norm & linear
     Tensor ln_out_output({embed_out.shape(0), embed_out.shape(1), _config.n_embd});
     _ln_out.forward(embed_out, ln_out_output);
 
@@ -169,17 +170,6 @@ void GPT2::load_weights(const std::string& path) {
             read_exact(shape.data(), ndim * sizeof(int32_t));
         }
 
-        // #########################################################
-        // std::string shape_str = "[ ";
-        // for (size_t i = 0; i < shape.size(); i++) {
-        //     shape_str += std::to_string(shape[i]) + " ";
-        //     if (i + 1 < shape.size()) {
-        //         shape_str += ", ";
-        //     }
-        // }
-        // shape_str += "]";
-        // printf("Key: %s, Shape: %s\n", key.c_str(), shape_str.c_str());
-
         uint64_t data_nbytes = 0;
         read_exact(&data_nbytes, sizeof(data_nbytes));
 
@@ -201,14 +191,21 @@ void GPT2::load_weights(const std::string& path) {
         _embedding2.set_weights(wpe.data(), wpe.size());
     }
 
-    for (int bi = 0; bi < _config.n_layers; bi++) {
-        _blocks[bi].load_weights(tensors, "blocks." + std::to_string(bi) + ".");
+    {
+        for (int bi = 0; bi < _config.n_layers; bi++) {
+            _blocks[bi].load_weights(tensors, "blocks." + std::to_string(bi) + ".");
+        }
     }
-
+    
     {
         const auto& lnw = tensors.at("ln_out.weight");
         const auto& lnb = tensors.at("ln_out.bias");
         _ln_out.set_params(lnw.data(), lnw.size(), lnb.data(), lnb.size());
+    }
+
+    {
+        const auto& lmh = tensors.at("linear_out.weights");
+        _linear_out.set_weights(lmh.data(), lmh.size());
     }
 
     // linear_out.weights is tied to embedding1 in init_weights().

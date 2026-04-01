@@ -115,23 +115,29 @@ int main() {
     auto [x, y] = train_dataset.get_batch(0);
 
     // Token ids on GPU: Embedding expects TensorBase<uint16_t> [B, T]
-    TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
-    {
-        thrust::host_vector<uint16_t> hx(x.size());
-        for (size_t i = 0; i < x.size(); ++i) {
-            hx[i] = x[i];
-        }
-        thrust::copy(
-            hx.begin(),
-            hx.end(),
-            thrust::device_ptr<uint16_t>(input_ids.data_ptr()));
+    // sample input examples
+    std::vector<uint16_t> input_ids(8*12);
+    for (int i = 0; i < 8*12; i++) {
+        input_ids[i] = static_cast<uint16_t>(i);
     }
+    TensorBase<uint16_t> input_ids_device({8, 12});
+    thrust::copy(
+        input_ids.begin(),
+        input_ids.end(),
+        thrust::device_ptr<uint16_t>(input_ids_device.data_ptr()));
 
     GPT2 gpt2(gpt2_config);
     gpt2.load_weights("checkpoints/weights.bin");
 
-    // GPT2 gpt2(gpt2_config);
-    // Tensor output({config.batch_size, config.block_size, gpt2_config.n_embd});
+    Tensor output;
+    output.resize({config.batch_size, config.block_size, gpt2_config.vocab_size});
+    gpt2.forward(input_ids_device, output);
+
+    printf("Output: ");
+    for (int i = 0; i < 10; i++) {
+        printf("%f ", static_cast<float>(output.storage()[i]));
+    }
+    printf("\n");
 
     // for (int i = 0; i < config.train_steps; i++) {
     //     auto batch_idx = i % 12;

@@ -169,10 +169,13 @@ if __name__ == "__main__":
         a = t.detach().cpu().numpy()
 
         # Match CUDA LinearLayer weight layout: [out_features, in_features].
-        # HF GPT-2 projection weights are typically [in_features, out_features].
+        # HF GPT-2 uses Conv1D for blocks; Conv1D stores weight as [in_features, out_features],
+        # so those need a transpose. lm_head is nn.Linear — weight is already [out, in] like
+        # PyTorch nn.Linear and must NOT be transposed.
         if hf_key.endswith(".weight") and a.ndim == 2 and hf_key not in (
             "transformer.wte.weight",
             "transformer.wpe.weight",
+            "lm_head.weight",
         ) and (".ln_" not in hf_key) and (not hf_key.startswith("transformer.ln_f.")):
             a = a.T
 
