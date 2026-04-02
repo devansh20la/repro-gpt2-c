@@ -45,23 +45,22 @@ Tick layers as you implement and verify them. The PyTorch column is your spec: s
 
 | Fwd | Layer | PyTorch Equivalent |
 |---|---|---|
-| [ ] | `Embedding` | `nn.Embedding` |
-| [ ] | `LinearLayer` | `nn.Linear` |
-| [ ] | `ReLU` | `nn.ReLU` |
-| [ ] | `Softmax` | `nn.Softmax` |
-| [ ] | `Attention` | `F.scaled_dot_product_attention` |
-| [ ] | `CausalMultiheadedAttention` | Full attention block |
-| [ ] | `LayerNorm` | `nn.LayerNorm` |
-| [ ] | `GELU` | `nn.GELU` |
-| [ ] | `MLP` | `Linear -> GELU -> Linear` |
-| [ ] | `TransformerBlock` | `LN -> Attn -> res -> LN -> MLP -> res` |
-| [ ] | `GPT2` | Full model |
-| [ ] | `CrossEntropyLoss` | `nn.CrossEntropyLoss` |
+| [X] | `Embedding` | `nn.Embedding` |
+| [X] | `LinearLayer` | `nn.Linear` |
+| [X] | `ReLU` | `nn.ReLU` |
+| [X] | `Softmax` | `nn.Softmax` |
+| [X] | `Attention` | `F.scaled_dot_product_attention` |
+| [X] | `CausalMultiheadedAttention` | Full attention block |
+| [X] | `LayerNorm` | `nn.LayerNorm` |
+| [X] | `GELU` | `nn.GELU` |
+| [X] | `MLP` | `Linear -> GELU -> Linear` |
+| [X] | `TransformerBlock` | `LN -> Attn -> res -> LN -> MLP -> res` |
+| [X] | `GPT2` | Full model |
+| [X] | `CrossEntropyLoss` | `nn.CrossEntropyLoss` |
 
 ## Where to start
 
 Suggested order:
-
 1. **Parallel programming context** — [CUDA lecture playlist](https://www.youtube.com/playlist?list=PL5B692fm6--vWLhYPqLcEu6RF3hXjEyJr)) is perfect introduction to thread blocks and memory.
 2. **Read the first three chapters** of *Programming Massively Parallel Processors* (through the core CUDA ideas)—enough to recognize launch configs and synchronization.
 3. **Learn the layout of this repo** (then open files in this order):
@@ -112,20 +111,28 @@ Suggested order:
 nvcc -ccbin /usr/bin/g++-10 -std=c++20 -O2 -o main main.cu model.cu --run
 ```
 
-## Time per layer
+## Time per layer of GPT 2 model
 You can always squeeze out more juice from the GPU with clever ways of tiling and writing kernels
 Try to measure time for forward pass of each layer and see how far can you get. 
 
-| Layer | Fwd (ms) |
+1. Add NVTX tags in `model.cu` (and optionally in `model/impl/block.cu` / submodules for block internals).
+2. Use `nsys` to measure time. (See the youtube course to understand correct methodology to measure time)
+
+*RTX 3060, input `[B,T] = [4,1024]`. **Avg (ms)** per `GPT2::forward` from `sys.log` (`nsys stats --report nvtx_sum --timeunit msec`, 12 instances).*
+
+### End-to-end
+
+| | Fwd (ms) |
 |---|---|
-| Embedding | |
-| LinearLayer | |
-| ReLU | |
-| Softmax | |
-| Attention | |
-| CausalMultiheadedAttention | |
-| LayerNorm | |
-| GELU | |
-| MLP | |
-| TransformerBlock | |
-| GPT2 | |
+| **GPT-2 forward (total)** | 18046.4112 |
+
+### Input & LM head (NVTX in `model.cu`)
+
+| Stage | Fwd (ms) | NVTX range |
+|---|---|---|
+| Token embedding (WTE) | 0.4649 | `GPT2/embedding_token` |
+| Position embedding (WPE) | 0.3328 | `GPT2/embedding_position` |
+| Add token + position embeddings | 0.1218 | `GPT2/add_token_and_position` |
+| Each Tranformer Block | 770 | `GPT2/transformer_block/0` |
+| Final LayerNorm (before logits) | 0.6302 | `GPT2/layer_norm_final` |
+| Final Linear (linear to vocab; weights tied to WTE) | 8889.5739 | `GPT2/lm_head_linear` |

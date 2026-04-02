@@ -7,10 +7,13 @@
 #include "model/impl/block.cu"
 #include "model/impl/mlp.cu"
 
+#include <nvtx3/nvtx3.hpp>
+
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/host_vector.h>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -55,13 +58,17 @@ __global__ void add_broadcast_pos_kernel(
 }
 
 void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
+    nvtx3::scoped_range const gpt2_forward{"GPT2/forward"};
+
     // input shape is [batch_size, sequence_length] / [B, T] (token ids on GPU)
     const int B = input.shape(0);
     const int T = input.shape(1);
 
-    // Get token embedding
     Tensor tok_embed({B, T, _config.n_embd});
-    _embedding1.forward(input, tok_embed);
+    {
+        nvtx3::scoped_range const r{"GPT2/embedding_token"};
+        _embedding1.forward(input, tok_embed);
+    }
 
     // Position ids [1, T] — one sequence 0..T-1; same for every batch row
     TensorBase<uint16_t> pos_ids({1, T});
@@ -77,49 +84,58 @@ void GPT2::forward(const TensorBase<uint16_t>& input, Tensor& output) {
     }
 
     Tensor pos_embed_out({1, T, _config.n_embd});
-    _embedding2.forward(pos_ids, pos_embed_out);
+    {
+        nvtx3::scoped_range const r{"GPT2/embedding_position"};
+        _embedding2.forward(pos_ids, pos_embed_out);
+    }
 
     // Add token embedding and position embedding (broadcast pos across batch)
     Tensor embed_out({B, T, _config.n_embd});
-    int block = 256;
-    int grid = (static_cast<int>(embed_out.size()) + block - 1) / block;
-    add_broadcast_pos_kernel<<<grid, block>>>(
-        tok_embed.data_ptr(),
-        pos_embed_out.data_ptr(),
-        embed_out.data_ptr(),
-        B,
-        T,
-        _config.n_embd);
+    {
+        nvtx3::scoped_range const r{"GPT2/add_token_and_position"};
+        int block = 256;
+        int grid = (static_cast<int>(embed_out.size()) + block - 1) / block;
+        add_broadcast_pos_kernel<<<grid, block>>>(
+            tok_embed.data_ptr(),
+            pos_embed_out.data_ptr(),
+            embed_out.data_ptr(),
+            B,
+            T,
+            _config.n_embd);
 
-    cudaError_t launch_err = cudaGetLastError();
-    if (launch_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_broadcast_pos_kernel launch failed: ") +
-            cudaGetErrorString(launch_err));
+        cudaError_t launch_err = cudaGetLastError();
+        if (launch_err != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("add_broadcast_pos_kernel launch failed: ") +
+                cudaGetErrorString(launch_err));
+        }
+
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("add_broadcast_pos_kernel execution failed: ") +
+                cudaGetErrorString(sync_err));
+        }
     }
 
-    cudaError_t sync_err = cudaDeviceSynchronize();
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("add_broadcast_pos_kernel execution failed: ") +
-            cudaGetErrorString(sync_err));
-    }
-
-    // pass through transformer blocks
     for (int i = 0; i < _config.n_layers; i++) {
+        char block_label[48];
+        std::snprintf(block_label, sizeof(block_label), "GPT2/transformer_block/%d", i);
+        nvtx3::scoped_range const block_range{block_label};
         _blocks[i].forward(embed_out, embed_out);
     }
-    printf("--------------------------------\n");
-    
-   
-    // // layer norm & linear
-    Tensor ln_out_output({embed_out.shape(0), embed_out.shape(1), _config.n_embd});
-    _ln_out.forward(embed_out, ln_out_output);
 
-    // output shape is [B, T, vocab_size]
-    // need to perform weight tying for this linear layer
+    Tensor ln_out_output({embed_out.shape(0), embed_out.shape(1), _config.n_embd});
+    {
+        nvtx3::scoped_range const r{"GPT2/layer_norm_final"};
+        _ln_out.forward(embed_out, ln_out_output);
+    }
+
     output.resize({input.shape(0), input.shape(1), _config.vocab_size});
-    _linear_out.forward(ln_out_output, output);
+    {
+        nvtx3::scoped_range const r{"GPT2/lm_head_linear"};
+        _linear_out.forward(ln_out_output, output);
+    }
 }
 
 

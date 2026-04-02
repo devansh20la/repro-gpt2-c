@@ -20,17 +20,9 @@ using namespace std;
 
 // Data class with config params
 struct TrainConfig {
-    int batch_size = 24;
+    int batch_size = 4;
     int block_size = 1024;
-    float batch_size_in_token_req = static_cast<float>(1 << 19);  // ~0.5M tokens
-    int train_steps = 1;
-    float lr = 6e-4f;
-    tuple<float, float> betas{0.9f, 0.95f};
-    float eps = 1e-8f;
-    int max_steps = 100;
-    float weighted_decay = 0.1f;
-    int grad_accum_steps = 0;
-    float min_lr = 0.0f;
+    int steps = 12;
 
     template <typename T>
     void print(T config_param, string config_name = "") const {
@@ -40,16 +32,7 @@ struct TrainConfig {
     void print_all_configs() const {
         print(batch_size, "batch_size");
         print(block_size, "block_size");
-        print(batch_size_in_token_req, "batch_size_in_token_req");
-        print(train_steps, "train_steps");
-        print(lr, "lr");
-        print(get<0>(betas), "betas[0]");
-        print(get<1>(betas), "betas[1]");
-        print(eps, "eps");
-        print(max_steps, "max_steps");
-        print(weighted_decay, "weighted_decay");
-        print(grad_accum_steps, "grad_accum_steps");
-        print(min_lr, "min_lr");
+        print(steps, "steps");
     }
 };
 
@@ -112,32 +95,38 @@ int main() {
     const string train_file_path = "data/train.bin";
     Dataset train_dataset(train_file_path, config.block_size, config.batch_size);
 
-    auto [x, y] = train_dataset.get_batch(0);
-
-    // Token ids on GPU: Embedding expects TensorBase<uint16_t> [B, T]
-    // sample input examples
-    std::vector<uint16_t> input_ids(8*12);
-    for (int i = 0; i < 8*12; i++) {
-        input_ids[i] = static_cast<uint16_t>(i);
-    }
-    TensorBase<uint16_t> input_ids_device({8, 12});
-    thrust::copy(
-        input_ids.begin(),
-        input_ids.end(),
-        thrust::device_ptr<uint16_t>(input_ids_device.data_ptr()));
-
+    printf("--------------------------------\n");
+    printf("Loading GPT2 model...\n");
     GPT2 gpt2(gpt2_config);
     gpt2.load_weights("checkpoints/weights.bin");
 
-    Tensor output;
-    output.resize({config.batch_size, config.block_size, gpt2_config.vocab_size});
-    gpt2.forward(input_ids_device, output);
+    printf("--------------------------------\n");
+    printf("Running Forward passes over training dataset...\n");
+    Tensor output({config.batch_size, config.block_size, gpt2_config.vocab_size});
+    TensorBase<uint16_t> input_ids({config.batch_size, config.block_size});
+    int batch_idx = 0;
+    for (int i = 0; i < config.steps; i++) {
+        batch_idx = i % train_dataset._num_batches;
+        auto [x, y] = train_dataset.get_batch(batch_idx);
 
-    printf("Output: ");
-    for (int i = 0; i < 10; i++) {
-        printf("%f ", static_cast<float>(output.storage()[i]));
+        // Copy input data to GPU
+        {
+            thrust::host_vector<uint16_t> hx(x.size());
+            for (size_t i = 0; i < x.size(); ++i) {
+                hx[i] = x[i];
+            }
+            thrust::copy(
+                hx.begin(), 
+                hx.end(),
+                thrust::device_ptr<uint16_t>(input_ids.data_ptr())
+            );
+        }
+        gpt2.forward(input_ids, output);
     }
-    printf("\n");
+    printf("--------------------------------\n");
+    printf("Forward passes completed\n");
+
+
 
     // for (int i = 0; i < config.train_steps; i++) {
     //     auto batch_idx = i % 12;
