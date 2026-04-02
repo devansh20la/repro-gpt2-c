@@ -118,21 +118,19 @@ Try to measure time for forward pass of each layer and see how far can you get.
 1. Add NVTX tags in `model.cu` (and optionally in `model/impl/block.cu` / submodules for block internals).
 2. Use `nsys` to measure time. (See the youtube course to understand correct methodology to measure time)
 
-*RTX 3060, input `[B,T] = [4,1024]`. **Avg (ms)** per `GPT2::forward` from `sys.log` (`nsys stats --report nvtx_sum --timeunit msec`, 12 instances).*
-
 ### End-to-end
 
-| | Fwd (ms) |
-|---|---|
+| Model | Fwd (ms)<br><small>RTX 3060 · input <code>[B,T] = [4,1024]</code></small> |
+|:---|:---:|
 | **GPT-2 forward (total)** | 18046.4112 |
 
 ### Input & LM head (NVTX in `model.cu`)
 
-| Stage | Fwd (ms) | NVTX range |
-|---|---|---|
+| Stage | Fwd (ms)<br><small>RTX 3060 · input <code>[B,T] = [4,1024]</code></small> | NVTX range |
+|:---|:---:|:---|
 | Token embedding (WTE) | 0.4649 | `GPT2/embedding_token` |
 | Position embedding (WPE) | 0.3328 | `GPT2/embedding_position` |
 | Add token + position embeddings | 0.1218 | `GPT2/add_token_and_position` |
-| Each Tranformer Block | 770 | `GPT2/transformer_block/0` |
+| Each Transformer block | 770 | `GPT2/transformer_block/` |
 | Final LayerNorm (before logits) | 0.6302 | `GPT2/layer_norm_final` |
 | Final Linear (linear to vocab; weights tied to WTE) | 8889.5739 | `GPT2/lm_head_linear` |

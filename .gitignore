@@ -14,3 +14,6 @@ __pycache__/
 scratch
 test_layers
 test_layers.cu
+sys.log
+repro_report.nsys-rep
+repro_report.sqlite
